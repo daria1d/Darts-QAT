@@ -1,3 +1,24 @@
+import json
+import os
+from dataclasses import dataclass
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from datasets import load_dataset
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, GPTNeoForCausalLM
+from quantizers import (
+    IdentityQuantizer,
+    BlockUniformWeightQuantizer,
+    NF4WeightQuantizer,
+    AsymmetricPACT,
+    DynamicTokenQuantizer,
+    LSQPlusWeightQuantizer,
+    LSQPlusActQuantizer,
+)
+
 def init_logits_bias(bits_list: Sequence[int], prefer_bits: int = 32, init_bias: float = 4.0) -> torch.Tensor:
     logits = torch.full((len(bits_list),), 1.0, dtype=torch.float32)
     return logits
@@ -583,7 +604,6 @@ def log_selected_quantizers(model: nn.Module) -> None:
 def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_name = "EleutherAI/gpt-neo-125M"
-
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -592,18 +612,25 @@ def main() -> None:
 
     quant_candidates_w = [
         {"bitwidth": 32, "qtype": "identity"},
-        {"bitwidth": 4, "qtype": "nf4", "block_size": 64},
-        {"bitwidth": 4, "qtype": "block_uniform", "block_size": 64},
-        {"bitwidth": 8, "qtype": "block_uniform", "block_size": 64},
+        {"bitwidth": 4, "qtype": "block_uniform"},
+        {"bitwidth": 8, "qtype": "block_uniform"},
+        {"bitwidth": 16, "qtype": "block_uniform"},
+        {"bitwidth": 4, "qtype": "lsq"},
         {"bitwidth": 8, "qtype": "lsq"},
+        {"bitwidth": 16, "qtype": "lsq"},
 
     ]
     quant_candidates_a = [
         {"bitwidth": 32, "qtype": "identity"},
-        {"bitwidth": 16, "qtype": "asym_pact"},
+        {"bitwidth": 4, "qtype": "asym_pact"},
         {"bitwidth": 8, "qtype": "asym_pact"},
+        {"bitwidth": 16, "qtype": "asym_pact"},
+        {"bitwidth": 4, "qtype": "dynamic_token"},
         {"bitwidth": 8, "qtype": "dynamic_token"},
+        {"bitwidth": 16, "qtype": "dynamic_token"},
+        {"bitwidth": 4, "qtype": "lsq"},
         {"bitwidth": 8, "qtype": "lsq"},
+        {"bitwidth": 16, "qtype": "lsq"},
     ]
 
     replace_linears_with_qat(model, quant_candidates_w, quant_candidates_a)
@@ -620,35 +647,37 @@ def main() -> None:
     val_tok = ds_val.map(tokenize_fn, batched=True, remove_columns=ds_val.column_names)
     train_tok.set_format(type="torch", columns=["input_ids", "attention_mask"])
     val_tok.set_format(type="torch", columns=["input_ids", "attention_mask"])
-
+    
     collate = make_collate_fn(tokenizer)
+    
     train_loader = DataLoader(train_tok, batch_size=4, shuffle=True, collate_fn=collate, num_workers=2, pin_memory=True)
     val_loader = DataLoader(val_tok, batch_size=4, shuffle=True, collate_fn=collate, num_workers=2, pin_memory=True)
+    
     calibration_batch = next(iter(train_loader))
+    
     initialize_lsq_parameters(model, calibration_batch, device)
     model_params, arch_params = collect_parameter_groups(model)
+    
     optimizer_model = AdamW(model_params, lr=2e-5, betas=(0.9, 0.95), weight_decay=0.01)
     optimizer_arch = AdamW(arch_params, lr=1e-4, betas=(0.5, 0.999), weight_decay=1e-3)
-
+    
     controller = StageController(model)
     controller.set_stage("fp32")
-
-    # full-precision reference cost on a representative sequence length.
+    
     sample_batch = next(iter(train_loader))
     avg_seq_len = compute_avg_seq_len(sample_batch["attention_mask"].to(device))
     fp_cost = compute_full_precision_cost(model, avg_seq_len)
-
     global_step = 0
     save_dir = "best_bits_steps_fixed"
     os.makedirs(save_dir, exist_ok=True)
     pad_id = tokenizer.pad_token_id
     avg_seq_len = compute_avg_seq_lenn(train_loader, pad_id)
+    
     max_linear_cost = torch.tensor(0.0, device=device)
     max_attention_macs_add = torch.tensor(0.0, device=device)
     for name, module in model.named_modules():
         if not isinstance(module, MixedPrecisionQATLinearEnhanced):
-            continue
-            
+            continue         
         if "c_fc" in name or "c_proj" in name:
             max_linear_cost = max_linear_cost + module.expected_linear_cost_base(
             avg_seq_len=avg_seq_len)
@@ -660,6 +689,7 @@ def main() -> None:
                 max_attention_macs_add += module.attention_macs_add(
                     avg_seq_len=avg_seq_len)
     base_size = max_linear_cost + max_attention_macs_add
+    
     global_step = 0
     for epoch in range(3):
         global_step = train_one_epoch(
