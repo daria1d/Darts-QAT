@@ -51,11 +51,11 @@ def build_quantizer(config_dict, kind='weight'):
     if kind == "weight":
         if qtype == "uniform":
             return BlockUniformWeightQuantizer(
-                bitwidth=bits, # обычно веса делаем per-channel
+                bitwidth=bits, 
             )
         elif qtype == "lsq":
             return LSQPlusWeightQuantizer(
-                num_bits=bits, # обычно веса делаем per-channel
+                num_bits=bits,
             )
         elif qtype == "nf4":
             return NF4WeightQuantizer(
