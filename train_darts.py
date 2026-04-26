@@ -635,32 +635,40 @@ def main() -> None:
 
     replace_linears_with_qat(model, quant_candidates_w, quant_candidates_a)
     model.to(device)
-    ds_train = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
-    ds_val = load_dataset("wikitext", "wikitext-2-raw-v1", split="validation")
+    dataset_name = "monology/pile-uncopyrighted" 
+    ds_train = load_dataset(dataset_name, split="train", streaming=True)
+    ds_train = ds_train.take(20000)
+    ds_val = load_dataset(dataset_name, split="train", streaming=True)
+    ds_val = ds_val.skip(20000).take(2000)
     ds_train = ds_train.filter(lambda x: x["text"] is not None and len(x["text"].strip()) > 0)
     ds_val = ds_val.filter(lambda x: x["text"] is not None and len(x["text"].strip()) > 0)
+    sample_element = next(iter(ds_train))
+    all_columns = list(sample_element.keys())
+    print(f"Removing columns: {all_columns}")
 
     def tokenize_fn(examples: Dict[str, List[str]]) -> Dict[str, List[List[int]]]:
         return tokenizer(examples["text"], truncation=True, padding=False, max_length=128)
+    train_tok = ds_train.map(
+        tokenize_fn, 
+        batched=True, 
+        remove_columns=all_columns
+    )
+    val_tok = ds_val.map(
+        tokenize_fn, 
+        batched=True, 
+        remove_columns=all_columns
+    )
+    train_tok = train_tok.with_format("torch")
+    val_tok = val_tok.with_format("torch")
 
-    train_tok = ds_train.map(tokenize_fn, batched=True, remove_columns=ds_train.column_names)
-    val_tok = ds_val.map(tokenize_fn, batched=True, remove_columns=ds_val.column_names)
-    train_tok.set_format(type="torch", columns=["input_ids", "attention_mask"])
-    val_tok.set_format(type="torch", columns=["input_ids", "attention_mask"])
-    
     collate = make_collate_fn(tokenizer)
-    
-    train_loader = DataLoader(train_tok, batch_size=4, shuffle=True, collate_fn=collate, num_workers=2, pin_memory=True)
-    val_loader = DataLoader(val_tok, batch_size=4, shuffle=True, collate_fn=collate, num_workers=2, pin_memory=True)
-    
+    train_loader = DataLoader(train_tok, batch_size=4, collate_fn=collate, num_workers=2)
+    val_loader = DataLoader(val_tok, batch_size=4, collate_fn=collate, num_workers=2)
     calibration_batch = next(iter(train_loader))
-    
     initialize_lsq_parameters(model, calibration_batch, device)
     model_params, arch_params = collect_parameter_groups(model)
-    
     optimizer_model = AdamW(model_params, lr=2e-5, betas=(0.9, 0.95), weight_decay=0.01)
     optimizer_arch = AdamW(arch_params, lr=1e-4, betas=(0.5, 0.999), weight_decay=1e-3)
-    
     controller = StageController(model)
     controller.set_stage("fp32")
     
