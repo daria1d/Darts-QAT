@@ -188,8 +188,8 @@ class MixedPrecisionQATLinearEnhanced(nn.Module):
         gamma_w = 1.0
         beta_a  = 1.0
         cost_matrix = (
-            (bits_w.unsqueeze(1) / 32) ** gamma_w *
-            (bits_a.unsqueeze(0) / 32) ** beta_a
+            bits_w.unsqueeze(1) ** gamma_w *
+            bits_a.unsqueeze(0) ** beta_a
         )
         prob_matrix = p_w.unsqueeze(1) * p_a.unsqueeze(0)
         expected_cost = (prob_matrix * cost_matrix).sum()
@@ -209,8 +209,8 @@ class MixedPrecisionQATLinearEnhanced(nn.Module):
         gamma_w = 1.0
         beta_a  = 1.0 
         cost_matrix = (
-            (bits_w.unsqueeze(1) / 32) ** gamma_w *
-            (bits_a.unsqueeze(0) / 32) ** beta_a
+            bits_w.unsqueeze(1) ** gamma_w *
+            bits_a.unsqueeze(0) ** beta_a
         )
         prob_matrix = p_w.unsqueeze(1) * p_a.unsqueeze(0)
         expected_cost = (prob_matrix * cost_matrix).sum()
