@@ -185,8 +185,8 @@ class MixedPrecisionQATLinearEnhanced(nn.Module):
         bits_a = torch.tensor(self.bits_a_list, device=device, dtype=dtype)
         min_bw = bits_w.min().clamp(min=1.0)
         min_ba = bits_a.min().clamp(min=1.0)
-        gamma_w = 2.2
-        beta_a  = 1.1
+        gamma_w = 1.0
+        beta_a  = 1.0
         cost_matrix = (
             (bits_w.unsqueeze(1) / 32) ** gamma_w *
             (bits_a.unsqueeze(0) / 32) ** beta_a
@@ -206,8 +206,8 @@ class MixedPrecisionQATLinearEnhanced(nn.Module):
         base_macs = self.attention_macs(avg_seq_len)
         bits_w = torch.tensor(self.bits_w_list, device=device, dtype=dtype)
         bits_a = torch.tensor(self.bits_a_list, device=device, dtype=dtype)
-        gamma_w = 2.2
-        beta_a  = 1.1 
+        gamma_w = 1.0
+        beta_a  = 1.0 
         cost_matrix = (
             (bits_w.unsqueeze(1) / 32) ** gamma_w *
             (bits_a.unsqueeze(0) / 32) ** beta_a
@@ -223,8 +223,8 @@ class MixedPrecisionQATLinearEnhanced(nn.Module):
         device = next(self.parameters()).device
         dtype = self.logits_w.dtype
         base_macs = self.linear_macs(avg_seq_len) 
-        gamma_w = 2.2
-        beta_a  = 1.1
+        gamma_w = 1.0
+        beta_a  = 1.0
         cost_matrix = (32 ** gamma_w) * (32 ** beta_a)
         return base_macs
 
@@ -232,8 +232,8 @@ class MixedPrecisionQATLinearEnhanced(nn.Module):
         device = next(self.parameters()).device
         dtype = self.logits_w.dtype
         base_macs = self.attention_macs(avg_seq_len)
-        gamma_w = 2.2 
-        beta_a  = 1.1 
+        gamma_w = 1.0 
+        beta_a  = 1.0 
         cost_matrix = (32 ** gamma_w) * (32 ** beta_a)
         return base_macs
         
@@ -647,7 +647,7 @@ def main() -> None:
     print(f"Removing columns: {all_columns}")
 
     def tokenize_fn(examples: Dict[str, List[str]]) -> Dict[str, List[List[int]]]:
-        return tokenizer(examples["text"], truncation=True, padding=False, max_length=128)
+        return tokenizer(examples["text"], truncation=True, padding=False, max_length=512)
     train_tok = ds_train.map(
         tokenize_fn, 
         batched=True, 
@@ -662,8 +662,8 @@ def main() -> None:
     val_tok = val_tok.with_format("torch")
 
     collate = make_collate_fn(tokenizer)
-    train_loader = DataLoader(train_tok, batch_size=4, collate_fn=collate, num_workers=2)
-    val_loader = DataLoader(val_tok, batch_size=4, collate_fn=collate, num_workers=2)
+    train_loader = DataLoader(train_tok, batch_size=16, collate_fn=collate, num_workers=2)
+    val_loader = DataLoader(val_tok, batch_size=16, collate_fn=collate, num_workers=2)
     calibration_batch = next(iter(train_loader))
     initialize_lsq_parameters(model, calibration_batch, device)
     model_params, arch_params = collect_parameter_groups(model)
